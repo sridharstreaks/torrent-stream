@@ -1,57 +1,70 @@
+import streamlit as st
 import libtorrent as lt
 import time
 import os
-import streamlit as st
-from streamlit_webrtc import WebRtcStreamerContext, webrtc_streamer
 
-def download_torrent(torrent_path, save_path, file_index=0):
+# Set up a directory for temporary storage
+temp_dir = "temp_video"
+os.makedirs(temp_dir, exist_ok=True)
+
+def download_torrent(magnet_link, save_path):
+    """Download a torrent file using libtorrent."""
     ses = lt.session()
-    ses.listen_on(6881, 6891)
+    ses.apply_settings({'listen_interfaces': '0.0.0.0:6881,[::]:6881'})
 
-    info = lt.torrent_info(torrent_path)
-    h = ses.add_torrent({'ti': info, 'save_path': save_path})
+    params = lt.add_torrent_params()
+    params.save_path = save_path
+    params.storage_mode = lt.storage_mode_t(2)
+    params.url = magnet_link
 
-    file_handle = h.torrent_file().files()
-    file_name = file_handle.file_path(file_index)
-    file_path = os.path.join(save_path, file_name)
+    handle = ses.add_torrent(params)
 
-    print(f'Starting download of {torrent_path}...')
-    while not h.is_seed():
-        s = h.status()
-        print(f'Downloading: {s.progress * 100:.2f}% complete (down: {s.download_rate / 1000:.1f} kB/s up: {s.upload_rate / 1000:.1f} kB/s peers: {s.num_peers})')
+    st.write("Downloading Metadata...")
+    while not handle.status().has_metadata:
         time.sleep(1)
+    st.write("Metadata Imported, Starting Download...")
 
-        # Check if the file has enough pieces to start streaming
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            break
+    while handle.status().state != lt.torrent_status.seeding:
+        s = handle.status()
+        state_str = [
+            "queued", "checking", "downloading metadata", "downloading", "finished",
+            "seeding", "allocating", "checking fastresume"
+        ]
+        progress_info = (
+            f"{s.progress * 100:.2f}% complete (down: {s.download_rate / 1000:.1f} kB/s, "
+            f"up: {s.upload_rate / 1000:.1f} kB/s, peers: {s.num_peers}) {state_str[s.state]}"
+        )
+        st.write(progress_info)
+        time.sleep(5)
 
-    return file_path
+    st.success("Download Complete!")
+    return os.path.join(save_path, handle.name())
 
-def stream_video(file_path):
-    def video_frame_callback(frame):
-        with open(file_path, 'rb') as f:
-            video_data = f.read()
-        frame.from_ndarray(video_data, format="bgr24")
-        return frame
+# Streamlit UI
+st.title("Torrent Video Downloader")
 
-    webrtc_streamer(key="example", video_frame_callback=video_frame_callback)
+magnet_link = st.text_input("Enter Magnet Link:")
+if magnet_link:
+    if st.button("Start Download"):
+        st.write("Starting download...")
+        downloaded_file_path = download_torrent(magnet_link, temp_dir)
 
-def main():
-    st.title("Torrent Video Streamer")
+        if os.path.exists(downloaded_file_path):
+            st.success("File downloaded successfully!")
 
-    torrent_file = st.text_input("Enter the path to the torrent file:")
-    save_path = st.text_input("Enter the path to save the downloaded video:")
+            # Provide a download button
+            with open(downloaded_file_path, "rb") as f:
+                video_data = f.read()
 
-    if st.button("Start Download and Stream"):
-        if not torrent_file or not save_path:
-            st.error("Please provide both torrent file path and save path.")
-        else:
-            video_file = download_torrent(torrent_file, save_path)
-            if video_file:
-                st.success("Download started. Streaming video...")
-                stream_video(video_file)
-            else:
-                st.error("No video file found in the torrent.")
+            st.download_button(
+                label="Download Video",
+                data=video_data,
+                file_name=os.path.basename(downloaded_file_path),
+                mime="video/mp4"  # Adjust MIME type based on file type
+            )
 
-if __name__ == "__main__":
-    main()
+# Optional cleanup button to remove temporary files
+if st.button("Clear Temporary Files"):
+    for file in os.listdir(temp_dir):
+        os.remove(os.path.join(temp_dir, file))
+    st.success("Temporary files cleared.")

@@ -27,12 +27,13 @@ def start_torrent_stream(magnet_link, save_path):
     st.session_state.torrent_handle = handle
 
     st.write("Downloading Metadata...")
-    while not handle.status().has_metadata:
+    while not handle.has_metadata():
         time.sleep(1)
     st.write("Metadata Imported, Starting Stream...")
 
     # Set priorities for the first few pieces (e.g., first 10%)
-    for i in range(min(10, handle.get_torrent_info().num_pieces())):
+    torrent_info = handle.torrent_file()
+    for i in range(min(10, torrent_info.num_pieces())):
         handle.piece_priority(i, 7)  # 7 = highest priority
 
 def monitor_and_stream_video():
@@ -42,7 +43,10 @@ def monitor_and_stream_video():
         st.warning("No active stream. Start a new session.")
         return
 
-    video_path = os.path.join(temp_dir, handle.name())
+    # Get the torrent info and save path
+    torrent_info = handle.torrent_file()
+    video_path = os.path.join(temp_dir, torrent_info.files().file_path(0))  # Get the first file in the torrent
+
     while not os.path.exists(video_path) or not os.path.isfile(video_path):
         s = handle.status()
         st.write(
@@ -52,7 +56,7 @@ def monitor_and_stream_video():
         time.sleep(5)
 
     # Check if sufficient pieces are downloaded for streaming
-    piece_length = handle.get_torrent_info().piece_length()
+    piece_length = torrent_info.piece_length()
     downloaded_bytes = handle.status().total_done
     buffer_threshold = piece_length * 10  # Require at least 10 pieces for buffer
 

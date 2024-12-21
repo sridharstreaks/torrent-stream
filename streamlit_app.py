@@ -12,8 +12,8 @@ if "torrent_session" not in st.session_state:
     st.session_state.torrent_session = lt.session()
     st.session_state.torrent_handle = None
 
-def start_download(magnet_link, save_path):
-    """Start or resume downloading a torrent."""
+def start_torrent_stream(magnet_link, save_path):
+    """Start streaming a torrent video."""
     ses = st.session_state.torrent_session
     ses.apply_settings({'listen_interfaces': '0.0.0.0:6881,[::]:6881'})
 
@@ -21,6 +21,7 @@ def start_download(magnet_link, save_path):
     params.save_path = save_path
     params.storage_mode = lt.storage_mode_t(2)
     params.url = magnet_link
+    params.flags |= lt.torrent_flags.sequential_download  # Enable sequential download
 
     handle = ses.add_torrent(params)
     st.session_state.torrent_handle = handle
@@ -28,58 +29,50 @@ def start_download(magnet_link, save_path):
     st.write("Downloading Metadata...")
     while not handle.status().has_metadata:
         time.sleep(1)
-    st.write("Metadata Imported, Starting Download...")
+    st.write("Metadata Imported, Starting Stream...")
 
-def monitor_download():
-    """Monitor download progress."""
+    # Set priorities for the first few pieces (e.g., first 10%)
+    for i in range(min(10, handle.get_torrent_info().num_pieces())):
+        handle.piece_priority(i, 7)  # 7 = highest priority
+
+def monitor_and_stream_video():
+    """Monitor download progress and stream video."""
     handle = st.session_state.torrent_handle
     if handle is None:
-        st.warning("No active download session. Start a new download.")
+        st.warning("No active stream. Start a new session.")
         return
 
-    while handle.status().state != lt.torrent_status.seeding:
+    video_path = os.path.join(temp_dir, handle.name())
+    while not os.path.exists(video_path) or not os.path.isfile(video_path):
         s = handle.status()
-        state_str = [
-            "queued", "checking", "downloading metadata", "downloading", "finished",
-            "seeding", "allocating", "checking fastresume"
-        ]
-        progress_info = (
-            f"{s.progress * 100:.2f}% complete (down: {s.download_rate / 1000:.1f} kB/s, "
-            f"up: {s.upload_rate / 1000:.1f} kB/s, peers: {s.num_peers}) {state_str[s.state]}"
+        st.write(
+            f"Progress: {s.progress * 100:.2f}% (down: {s.download_rate / 1000:.1f} kB/s, "
+            f"peers: {s.num_peers})"
         )
-        st.write(progress_info)
         time.sleep(5)
 
-    st.success("Download Complete!")
+    # Check if sufficient pieces are downloaded for streaming
+    piece_length = handle.get_torrent_info().piece_length()
+    downloaded_bytes = handle.status().total_done
+    buffer_threshold = piece_length * 10  # Require at least 10 pieces for buffer
+
+    if downloaded_bytes >= buffer_threshold:
+        st.video(video_path)
+    else:
+        st.warning("Buffering... Please wait for more data to download.")
 
 # Streamlit UI
-st.title("Torrent Video Downloader")
+st.title("Stream Torrent Video")
 
 magnet_link = st.text_input("Enter Magnet Link:")
 if magnet_link:
-    if st.button("Start Download"):
-        st.write("Starting download...")
-        start_download(magnet_link, temp_dir)
+    if st.button("Start Stream"):
+        st.write("Initializing stream...")
+        start_torrent_stream(magnet_link, temp_dir)
 
 if st.session_state.torrent_handle:
-    if st.button("Monitor Progress"):
-        monitor_download()
-
-# Show download button if the file is completed
-if st.session_state.torrent_handle:
-    handle = st.session_state.torrent_handle
-    if handle.status().state == lt.torrent_status.seeding:
-        completed_file_path = os.path.join(temp_dir, handle.name())
-        if os.path.exists(completed_file_path):
-            with open(completed_file_path, "rb") as f:
-                video_data = f.read()
-
-            st.download_button(
-                label="Download Video",
-                data=video_data,
-                file_name=os.path.basename(completed_file_path),
-                mime="video/mp4"  # Adjust MIME type based on file type
-            )
+    if st.button("Stream Video"):
+        monitor_and_stream_video()
 
 # Optional cleanup button to remove temporary files
 if st.button("Clear Temporary Files"):
